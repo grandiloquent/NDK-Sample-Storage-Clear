@@ -2,25 +2,21 @@ package euphoria.psycho.calculatedirectories;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.admin.NetworkEvent;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.SystemClock;
-import android.os.Bundle;
 import android.text.format.Formatter;
-import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.File;
-import java.io.FileFilter;
-import java.nio.file.Files;
 import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
@@ -28,72 +24,46 @@ public class MainActivity extends Activity {
     private static final String TAG = "TAG/" + MainActivity.class.getCanonicalName();
 
     private void calculate() {
+
         final File[] dirList = Environment.getExternalStorageDirectory().listFiles(pathname -> {
             if (pathname.isDirectory()) return true;
             return false;
         });
         final Collator collator = Collator.getInstance(Locale.CHINA);
-        Arrays.sort(dirList, new Comparator<File>() {
-            @Override
-            public int compare(File o1, File o2) {
-                return collator.compare(o1.getName(), o2.getName());
-            }
-        });
+        Arrays.sort(dirList, (o1, o2) -> collator.compare(o1.getName(), o2.getName()));
         final TextView textView = findViewById(R.id.text);
         final List<FileItem> fileItems = new ArrayList<>();
 
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final StringBuilder sb = new StringBuilder();
+        ThreadUtils.postOnBackgroundThread(() -> {
+            final StringBuilder sb = new StringBuilder();
 
 
-                int count = 0;
-                for (File dir : dirList) {
-                    count++;
-                    long size = dirSize(dir);
-                    String description = Formatter.formatFileSize(MainActivity.this, size);
-                    sb.append(dir.getName() + " 目录大小为: " + description).append('\n');
-                    FileItem fileItem = new FileItem();
-                    fileItem.name = dir.getName();
-                    fileItem.size = size;
-                    fileItem.description = description;
-                    fileItems.add(fileItem);
-                    MainActivity.this.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            textView.setText(sb.toString());
-                        }
-                    });
-                    SystemClock.sleep(500);
-                }
-                sb.append("总共 " + count + " 目录");
-                MainActivity.this.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        textView.setText(sb.toString());
-                    }
-                });
+            int count = 0;
+            for (File dir : dirList) {
+                count++;
+                long size = NativeMethods.calculateDirectory(dir.getAbsolutePath());
+                String description = Formatter.formatFileSize(MainActivity.this, size);
 
-                Collections.sort(fileItems, new Comparator<FileItem>() {
-                    @Override
-                    public int compare(FileItem o1, FileItem o2) {
-                        return o1.size >= o2.size ? -1 : 1;
-                    }
-                });
-                sb.setLength(0);
-                sb.append("所有目录，从大到小依次排列: \n\n");
-                for (FileItem f : fileItems) {
-                    sb.append(f.name + "  <==> " + f.description).append("\n");
-                }
-                MainActivity.this.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        textView.setText(sb.toString());
-                    }
-                });
+                FileItem fileItem = new FileItem();
+                fileItem.name = dir.getName();
+                fileItem.size = size;
+                fileItem.description = description;
+                fileItems.add(fileItem);
+                ThreadUtils.postOnMainThread(() -> textView.setText("计算中...\n" + fileItem.name + " | " + fileItem.description));
+                SystemClock.sleep(100);
             }
-        }).start();
+            ThreadUtils.postOnMainThread(() -> textView.setText(sb.toString()));
+            Collections.sort(fileItems, (o1, o2) -> o1.size >= o2.size ? -1 : 1);
+            sb.setLength(0);
+            sb.append("总共计算手机内部储存中 ").append(count).append(" 个目录").append('\n');
+            sb.append("从大到小依次排列: \n\n");
+            sb.append("目录名").append(" | ").append("大小").append("\n\n");
+            for (FileItem f : fileItems) {
+                sb.append(f.name).append(" | ").append(f.description).append("\n");
+            }
+
+            ThreadUtils.postOnMainThread(() -> textView.setText(sb.toString()));
+        });
     }
 
     private static long dirSize(File dir) {
@@ -120,7 +90,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 0);
+            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
         } else
             calculate();
 
@@ -144,9 +114,22 @@ public class MainActivity extends Activity {
     }
 
     private void actionClear() {
-        String dir = new File(Environment.getExternalStorageDirectory(), "Android").getAbsolutePath();
-        Log.e(TAG, NativeMethods.calculateDirectory(dir) + " ");
-        //deleteDir(new File(Environment.getExternalStorageDirectory(),""));
+        File externalStorageDirectory = Environment.getExternalStorageDirectory();
+        if (externalStorageDirectory == null) return;
+        String dir = externalStorageDirectory.getAbsolutePath();
+        String[] directories = new String[]{
+                dir + "/tencent",
+                dir + "/.dir_com.qihoo360.feichuan",
+                dir + "/DCIM/.thumbnails",
+                dir + "/.thumbnails",
+
+        };
+        ThreadUtils.postOnBackgroundThread(() -> {
+            NativeMethods.deleteDirectories(directories);
+            ThreadUtils.postOnMainThread(() -> {
+                Toast.makeText(this, "已完成清理", Toast.LENGTH_LONG).show();
+            });
+        });
     }
 
     void deleteDir(File file) {
